@@ -1,0 +1,19 @@
+bundle:
+  name: ai-meter
+
+workspace:
+  host: https://e2-demo-field-eng.cloud.databricks.com
+  profile: nara_dbx
+
+targets:
+  dev:
+    default: true
+    workspace:
+      root_path: /Users/narasimha.kamathardi@databricks.com/.bundle/ai-meter/dev
+
+resources:
+  apps:
+    ai_meter:
+      name: "ai-meter-nara"
+      description: "AI Token Usage Meter — track and manage AI model spending per user"
+      source_code_path: .
