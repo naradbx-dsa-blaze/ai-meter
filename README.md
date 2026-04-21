@@ -4,28 +4,33 @@
 
 ---
 
-## How it works
+## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Databricks Workspace                       │
-│                                                                 │
-│   Users ──► FM Endpoints ──► system.ai_gateway.usage           │
-│             (Claude, Llama,       (auto-populated               │
-│              DBRX, GPT…)           by Databricks)               │
-│                                         │                       │
-│                                         ▼                       │
-│                               ┌─────────────────┐              │
-│                               │   AI Meter App  │              │
-│                               │   (Streamlit)   │              │
-│                               └────────┬────────┘              │
-│                                        │                        │
-│                               ┌────────▼────────┐              │
-│                               │  nara_demo      │              │
-│                               │  ai_user_budgets│              │
-│                               │  ai_alert_logs  │              │
-│                               └─────────────────┘              │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    U1[👤 User A] -->|API call| EP
+    U2[👤 User B] -->|API call| EP
+    U3[👤 User C] -->|API call| EP
+
+    EP["🔵 Databricks FM Endpoints\n(Claude · Llama · DBRX · GPT)"]
+
+    EP -->|auto-logged| SYS["📊 system.ai_gateway.usage\n(Databricks system table)"]
+
+    SYS --> APP["🤖 AI Meter\nStreamlit Dashboard"]
+
+    APP --> BUD["🗄️ Delta Tables\nai_user_budgets\nai_alert_logs"]
+
+    APP -->|optional| SLACK["💬 Slack Alerts\n⚠️ 80% warning\n🚨 100% exceeded"]
+
+    PROXY["⚡ FastAPI Proxy\n(optional enforcement)"] -->|intercept| EP
+    U1 -.->|route through proxy| PROXY
+
+    style EP fill:#1B6EC2,color:#fff
+    style SYS fill:#0D7D59,color:#fff
+    style APP fill:#7B2FBE,color:#fff
+    style BUD fill:#C25E1B,color:#fff
+    style SLACK fill:#4A154B,color:#fff
+    style PROXY fill:#C21B1B,color:#fff
 ```
 
 Zero instrumentation on the user side — any call to a Foundation Model endpoint shows up automatically.
@@ -108,7 +113,7 @@ Limits are configurable per user from the sidebar. A Slack alert fires once when
 
 ---
 
-## Architecture
+## Project structure
 
 ```
 app/
@@ -144,7 +149,7 @@ Creates three Delta tables in your configured catalog/schema:
 
 | Table | Purpose |
 |---|---|
-| `ai_usage_logs` | Proxy-tracked calls (optional, only if using the FastAPI proxy) |
+| `ai_usage_logs` | Proxy-tracked calls (only if using the FastAPI proxy) |
 | `ai_user_budgets` | Per-user daily token limits + Slack IDs |
 | `ai_alert_logs` | Alert history with per-day deduplication |
 
@@ -158,7 +163,7 @@ DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
 DATABRICKS_TOKEN=<your-pat-token>
 DATABRICKS_SQL_WAREHOUSE_ID=<serverless-warehouse-id>
 
-# Unity Catalog storage for budgets/alerts
+# Unity Catalog — where budgets and alert logs are stored
 DATABRICKS_CATALOG=<your-catalog>
 DATABRICKS_SCHEMA=<your-schema>
 
@@ -175,38 +180,40 @@ SLACK_BOT_TOKEN=xoxb-…
 SLACK_DEFAULT_CHANNEL=#ai-usage-alerts
 ```
 
-> **Note:** When running as a Databricks App the token is not needed — the app authenticates via OAuth automatically.
+> **Note:** When deployed as a Databricks App the token is not required — the app authenticates via OAuth automatically.
 
 ### 3. Run locally
 
 ```bash
-# Dashboard
 pip install streamlit plotly
 streamlit run dashboard/app.py
 
-# Proxy (optional)
+# Optional proxy
 uvicorn app.main:app --reload
 ```
 
 ### 4. Deploy as a Databricks App
 
 ```bash
-# Upload source code to workspace
+# Upload source to workspace
 databricks workspace import-dir . /Workspace/Users/<you>/ai-meter --overwrite
 
-# Create app (first time only)
-databricks apps create <your-app-name> --description "AI Token Usage Meter"
+# Create (first time only)
+databricks apps create <your-app-name> \
+  --description "AI Token Usage Meter"
 
 # Deploy
 databricks apps deploy <your-app-name> \
   --source-code-path /Workspace/Users/<you>/ai-meter
 ```
 
+> Grant the app's service principal `USE CATALOG`, `USE SCHEMA`, and `SELECT + MODIFY` on your catalog/schema tables after the first deploy.
+
 ---
 
 ## Proxy API (optional)
 
-If you want per-request enforcement (block users who exceed their limit), point your app at the proxy instead of the FM endpoint directly.
+Point your application at the proxy instead of the FM endpoint to enforce limits at the request level.
 
 ```
 POST /v1/chat/completions        OpenAI-compatible proxy
@@ -217,7 +224,7 @@ GET  /v1/budgets/{user_id}       Get a user's configured budget
 GET  /health                     Health check
 ```
 
-**Example:**
+**Example request:**
 
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
@@ -226,7 +233,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "Summarise this report…"}]}'
 ```
 
-When a user exceeds their daily limit the proxy returns `HTTP 429`:
+**Response when limit exceeded (`HTTP 429`):**
 
 ```json
 {
@@ -252,7 +259,7 @@ alice@company.com  You've exceeded your daily token budget (2,847 / 2,000 tokens
 Further requests will be blocked.
 ```
 
-Alerts fire once per threshold per user per day (no repeat spam).
+Alerts fire once per threshold per user per day — no repeat spam.
 
 ---
 
